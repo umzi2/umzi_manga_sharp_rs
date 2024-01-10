@@ -1,15 +1,20 @@
-extern crate image;
-
+use std::collections::HashMap;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::{fs};
+use image::GrayImage;
 use rayon::prelude::*;
 use ndarray::{Array2};
+use imageproc::filter::median_filter;
 
-fn color_levels(input: Vec<u8>, in_high: u8, in_low: u8, gamma: f32, out_low: u8, out_high: u8, rows: usize, cols: usize) -> Vec<u8> {
-    let mut array = Array2::from_shape_vec((rows, cols), input).unwrap();
 
-    array.mapv_inplace(|x| if x + in_high <= u8::MAX.into() { x + in_high } else { u8::MAX });
-    array.mapv_inplace(|x| if x >= in_low { x - in_low } else { 0 });
+fn color_levels(mut image: GrayImage, scores: HashMap<&str, u8>, gamma: f32) -> GrayImage {
+    let width = image.width() as usize;
+    let height = image.height() as usize;
+    let input: Vec<u8> = image.clone().into_raw();
+    let mut array = Array2::from_shape_vec((width, height), input).unwrap();
+
+    array.mapv_inplace(|x| if x + scores["in_high"] <= u8::MAX.into() { x + scores["in_high"] } else { u8::MAX });
+    array.mapv_inplace(|x| if x >= scores["in_low"] { x - scores["in_low"] } else { 0 });
     array.mapv_inplace(|x| {
         let result = (x as f32 * gamma).round() as u8;
         if result > u8::MAX {
@@ -21,30 +26,26 @@ fn color_levels(input: Vec<u8>, in_high: u8, in_low: u8, gamma: f32, out_low: u8
     let max_value = array.fold(0, |acc, &x| acc.max(x));
     array.mapv_inplace(|x| ((x as f32 / max_value as f32) * 255.0).round() as u8);
 
-    array.mapv_inplace(|x| if x + out_high <= u8::MAX.into() { x + out_high } else { u8::MAX });
-    array.mapv_inplace(|x| if x >= out_low { x - out_low } else { 0 });
-    let input: Vec<u8> = array.into_raw_vec();
-    input
+    array.mapv_inplace(|x| if x + (255 - scores["out_high"]) <= u8::MAX.into() { x + (255 - scores["out_high"]) } else { u8::MAX });
+    array.mapv_inplace(|x| if x >= scores["out_low"] { x - scores["out_low"] } else { 0 });
+    let input_vec: Vec<u8> = array.into_raw_vec();
+    image.copy_from_slice(&input_vec);
+    image
 }
 
 fn process_images(path2: &str, output_path: &str) {
-    let mut gray_img = image::open(path2).expect("Не удалось загрузить изображение").grayscale().to_luma8();
+    let gray_img = image::open(path2).expect("Не удалось загрузить изображение").to_luma8();
 
-    // Преобразование изображения в оттенки серого
-    let width = gray_img.width() as usize;
-    let height = gray_img.height() as usize;
-
-    // Получение массива пикселей оттенков серого
-    let gray_pixels: Vec<u8> = gray_img.clone().into_raw();
-    let in_high: u8 = 0;
-    let in_low: u8 = 0;
     let gamma: f32 = 1.0;
-    let out_low: u8 = 0;
-    let out_high: u8 = 255;
-    let out_high2: u8 = 255 - out_high;
-    let gray_pixels = color_levels(gray_pixels, in_high, in_low, gamma, out_low, out_high2, width, height);
+    let mut scores = HashMap::new();
+    scores.insert("in_high", 0);
+    scores.insert("in_low", 0);
+    scores.insert("out_low", 0);
+    scores.insert("out_high", 255);
 
-    gray_img.copy_from_slice(&gray_pixels);
+    let gray_img = color_levels(gray_img, scores, gamma);
+    let gray_img = median_filter(&gray_img, 2, 2);
+
     let _ = gray_img.save(output_path);
 }
 
